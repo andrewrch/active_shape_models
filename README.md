@@ -1,3 +1,3 @@
-#### Active Shape Models
+# Active Shape Models
 
-# Author: Andrew Chambers
+#### Author: Andrew Chambers
