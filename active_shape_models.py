@@ -3,7 +3,53 @@
 import sys
 import os
 import glob
+import math
 import numpy as np
+
+class Point ( object ):
+  """ Class to represent a point in 2d cartesian space """
+  def __init__(self, x, y):
+    self.x = x
+    self.y = y
+    
+  def __add__(self, p):
+    """ Return a new point which is equal to this point added to p
+    :param p: The other point
+    """
+    return Point(self.x + p.x, self.y + p.y)
+    
+  def __repr__(self):
+    """return a string representation of this point. """
+    return '(%d, %d)' % (self.x, self.y)
+    
+  def dist(self, p):
+    """ Return the distance of this point to another point
+    
+    :param p: The other point
+    """
+    return sqrt((p.x - self.x)**2 + (p.y - self.y)**2)
+
+class Shape ( object ):
+  """ Class to represent a shape.  This is essentially a list of Point
+  objects
+  """
+  def __init__(self, pts = list()):
+    self.pts = pts
+    self.num_pts = len(pts)
+  
+  def add_point(self, p):
+    self.pts.append(p)
+    self.num_pts += 1
+  
+  def align_shape(self, shape, w):
+    """ Aligns this shape to the given shape using the weight matrix
+    provided.
+    
+    :param shape: The shape to align to
+    :param w: The weight matrix
+    :return s: The aligned shape
+    """
+    pass
 
 class PointsReader ( object ):
 	""" Class to read from files provided on Tim Cootes's website."""
@@ -50,8 +96,22 @@ class ActiveShapeModel:
 	"""
 	def train():
 		pass
+    
+  def __procrustes(self, shapes):
+    """ This function aligns all shapes passed as a parameter by using
+    Procrustes analysis
+    
+    :param shapes: A list of Shape objects
+    """
+    pass
 	
-	def createWeightMatrix(self, pts):
+	def __create_weight_matrix(self, shapes):
+    """ Private method to produce the weight matrix which corresponds
+    to the training shapes
+    
+    :param shapes: A list of Shape objects
+    :return w: The matrix of weights produced from the shapes
+    """
 		pass
 		
 
@@ -60,4 +120,4 @@ def main():
 	print "Finished"
 
 if __name__ == "__main__":
-    main()
+  main()
