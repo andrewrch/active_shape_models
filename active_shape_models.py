@@ -8,6 +8,12 @@ import math
 import numpy as np
 from random import randint
 
+def drange(start, stop, step):
+  r = start
+  while r < stop:
+    yield r
+    r += step
+
 class Point ( object ):
   """ Class to represent a point in 2d cartesian space """
   def __init__(self, x, y):
@@ -78,6 +84,12 @@ class Shape ( object ):
     self.pts.append(p)
     self.num_pts += 1
 
+  def transform(self, t):
+    s = Shape([])
+    for p in self.pts:
+      s.add_point(p + t)
+    return s
+
   """ Helper methods for shape alignment """
   def __get_X(self, w):
     return sum([w[i]*self.pts[i].x for i in range(len(self.pts))])
@@ -130,14 +142,7 @@ class Shape ( object ):
     # Solve equations
     # result is [ax, ay, tx, ty]
     return np.linalg.solve(a, b)
-    #new = Shape([])
-    #print res
-    # For each point in current shape
-    #for pt in self.pts:
-     # new_x = (res[0]*pt.x - res[1]*pt.y) + res[2]
-     # new_y = (res[1]*pt.x + res[0]*pt.y) + res[3]
-     # new.add_point(Point(new_x, new_y))
-    #eturn new
+
   def apply_params_to_shape(self, p):
     new = Shape([])
     # For each point in current shape
@@ -157,6 +162,30 @@ class Shape ( object ):
       vec[i,:] = [self.pts[i].x, self.pts[i].y]
     return vec.flatten()
 
+  def get_normal_to_point(self, p_num):
+    # Normal to first point
+    x = 0; y = 0; mag = 0
+    if p_num == 0:
+      x = self.pts[1].x - self.pts[0].x
+      y = self.pts[1].y - self.pts[0].y
+    # Normal to last point
+    elif p_num == len(self.pts)-1:
+      x = self.pts[-1].x - self.pts[-2].x
+      y = self.pts[-1].y - self.pts[-2].y
+    # Must have two adjacent points, so...
+    else:
+      x = self.pts[p_num+1].x - self.pts[p_num-1].x
+      y = self.pts[p_num+1].y - self.pts[p_num-1].y
+    mag = math.sqrt(x**2 + y**2)
+    return (-y/mag, x/mag)
+
+  @staticmethod
+  def from_vector(vec):
+    s = Shape([])
+    for i,j in np.reshape(vec, (-1,2)):
+      s.add_point(Point(i, j))
+    return s
+
 class ShapeViewer ( object ):
   """ Provides functionality to display a shape in a window
   """
@@ -164,7 +193,7 @@ class ShapeViewer ( object ):
   def show_shapes(shapes):
     """ Function to show all of the shapes which are passed to it
     """
-    cv.NamedWindow('a_window', cv.CV_WINDOW_AUTOSIZE)
+    cv.NamedWindow("Shape Model", cv.CV_WINDOW_AUTOSIZE)
     # Get size for the window
     max_x = int(max([pt.x for shape in shapes for pt in shape.pts]))
     max_y = int(max([pt.y for shape in shapes for pt in shape.pts]))
@@ -172,22 +201,51 @@ class ShapeViewer ( object ):
     min_y = int(min([pt.y for shape in shapes for pt in shape.pts]))
 
     i = cv.CreateImage((max_x-min_x+20, max_y-min_y+20), cv.IPL_DEPTH_8U, 3)
-    cv.Set(i, 0)
+    cv.Set(i, (255,255,255))
     for shape in shapes:
       #r = randint(0, 255)
       #g = randint(0, 255)
       #b = randint(0, 255)
-      r = 255
-      g = 255
-      b = 255
-      #print "(%d, %d, %d)" % (r, g, b)
-      curr_pt = shape.pts[0]
-      cv.Circle(i, (int(curr_pt.x-min_x), int(curr_pt.y-min_y)), 1, (r, g, b))
-      for pt in shape.pts[1:]:
-        cv.Circle(i, (int(pt.x-min_x), int(pt.y-min_y)), 1, (r, g, b))
-        cv.Line(i, (int(curr_pt.x-min_x), int(curr_pt.y-min_y)), (int(pt.x-min_x), int(pt.y-min_y)), (r, g, b))
-        curr_pt = pt
-    cv.ShowImage("a_window",i)
+      r = 0
+      g = 0
+      b = 0
+      for pt_num, pt in enumerate(shape.pts):
+        # Draw normals
+        norm = shape.get_normal_to_point(pt_num)
+        cv.Line(i,(pt.x-min_x,pt.y-min_y), \
+            (norm[0]*10 + pt.x-min_x, norm[1]*10 + pt.y-min_y), (r, g, b))
+        cv.Circle(i, (int(pt.x-min_x), int(pt.y-min_y)), 2, (r, g, b), -1)
+    cv.ShowImage("Shape Model",i)
+
+  @staticmethod
+  def show_modes_of_variation(model, mode):
+    # Get the limits of the animation
+    start = -2*math.sqrt(model.evals[mode])
+    stop = -start
+    step = (stop - start) / 100
+
+    b_all = np.zeros(model.modes)
+    b = start
+    while True:
+      b_all[mode] = b
+      s = model.generate_example(b_all)
+      ShapeViewer.show_shapes([s])
+      # Reverse direction when we get to the end to keep it running
+      if (b < start and step < 0) or (b > stop and step > 0):
+        step = -step
+      b += step
+      c = cv.WaitKey(10)
+      if chr(255&c) == 'q': break
+
+  @staticmethod
+  def draw_model_fitter(f):
+    cv.NamedWindow("Model Fitter", cv.CV_WINDOW_AUTOSIZE)
+    # Copy image
+    i = f.image
+    for pt_num, pt in enumerate(f.shape.pts):
+      # Draw normals
+      cv.Circle(i, (int(pt.x), int(pt.y)), 2, (0,0,0), -1)
+    cv.ShowImage("Shape Model",i)
     cv.WaitKey()
 
 class PointsReader ( object ):
@@ -227,6 +285,94 @@ class PointsReader ( object ):
       pts.append(PointsReader.read_points_file(file))
     return pts
 
+class ModelFitter:
+  """
+  Class to fit a model to an image
+
+  :param asm: A trained active shape model
+  :param image: An OpenCV image
+  :param t: A transformation to move the shape to a new origin
+  """
+  def __init__(self, asm, image, t=Point(0.0,0.0)):
+    self.image = image
+    self.g_image = self.__produce_gradient_image(image)
+    self.asm = asm
+    # Copy mean shape as starting shape and transform it to origin
+    self.shape = Shape.from_vector(asm.mean).transform(t)
+    # And resize shape to fit image if required
+    if self.__shape_outside_image(self.shape, self.image):
+      self.shape = self.__resize_shape_to_fit_image(self.shape, self.image)
+
+  def __shape_outside_image(self, s, i):
+    for p in s.pts:
+      if p.x > i.width or p.x < 0 or p.y > i.height or p.y < 0:
+        return True
+    return False
+
+  def __resize_shape_to_fit_image(self, s, i):
+    # Get rectagonal boundary orf shape
+    min_x = min([pt.x for pt in s.pts])
+    min_y = min([pt.y for pt in s.pts])
+    max_x = max([pt.x for pt in s.pts])
+    max_y = max([pt.y for pt in s.pts])
+
+    # If it is outside the image then we'll translate it back again
+    if min_x > i.width: min_x = 0
+    if min_y > i.height: min_y = 0
+    ratio_x = (i.width-min_x) / (max_x - min_x)
+    ratio_y = (i.height-min_y) / (max_y - min_y)
+    new = Shape([])
+    for pt in s.pts:
+      new.add_point(Point(pt.x*ratio_x if ratio_x < 1 else pt.x, \
+                          pt.y*ratio_y if ratio_y < 1 else pt.y))
+    return new
+
+  def __produce_gradient_image(self, i):
+    grey_image = cv.CreateImage(cv.GetSize(i), 8, 1)
+    cv.CvtColor(i, grey_image, cv.CV_RGB2GRAY)
+    df_dx = cv.CreateImage(cv.GetSize(i), cv.IPL_DEPTH_16S, 1)
+    cv.Sobel( grey_image, df_dx, 1, 1)
+    cv.Convert(df_dx, grey_image)
+    return grey_image
+
+  def do_iteration(self):
+    """ Does a single iteration of the shape fitting algorithm.
+    This is useful when we want to show the algorithm converging on
+    an image
+
+    :return shape: The shape in its current orientation
+    """
+    for i, pt in enumerate(self.shape.pts):
+      self.__get_max_along_normal(i)
+
+  def __get_max_along_normal(self, p_num):
+    """ Gets the max edge response along the normal to a point
+
+    :param p_num: Is the number of the point in the shape
+    """
+    norm = self.shape.get_normal_to_point(p_num)
+    p = self.shape.pts[p_num]
+
+    # Find extremes of normal within the image
+    # Test x first
+    min_t = -p.x / norm[0]
+    if p.y + min_t*norm[1] < 0 or p.y + min_t*norm[1] > self.image.height:
+      min_t = -p.y / norm[1]
+    max_t = (self.image.width - p.x) / norm[0]
+    if p.y + max_t*norm[1] < 0 or p.y + max_t*norm[1] > self.image.height:
+      max_t = (self.image.width - p.y) / norm[1]
+
+    # Get length of the normal within the image
+    l = math.sqrt(max(norm[0]*min_t + p.x, norm[0]*max_t + p.x)
+
+#    cv.Line(self.image, (int(norm[0]*min_t + p.x), int(norm[1]*min_t + p.y)), \
+#            (int(norm[0]*max_t + p.x), int(norm[1]*max_t + p.y)), (0, 0, 0))
+
+
+#    cv.NamedWindow("Shape Model", cv.CV_WINDOW_AUTOSIZE)
+#    cv.ShowImage("Shape Model",self.image)
+#    cv.WaitKey()
+
 class ActiveShapeModel:
   """
   """
@@ -235,15 +381,15 @@ class ActiveShapeModel:
     # Make sure the shape list is valid
     self.__check_shapes(shapes)
     # Create weight matrix for points
-    print "Calculating weight matrix"
+    print "Calculating weight matrix..."
     self.w = self.__create_weight_matrix(shapes)
     # Align all shapes
-    print "Aligning shapes with Procrustes analysis"
+    print "Aligning shapes with Procrustes analysis..."
     self.shapes = self.__procrustes(shapes)
-    print "Producing model"
+    print "Constructing model..."
     # Initialise this in constructor
-    self.num_modes = 0
-    self.__produce_model(self.shapes)
+    (self.evals, self.evecs, self.mean, self.modes) = \
+        self.__construct_model(self.shapes)
 
   def __check_shapes(self, shapes):
     """ Method to check that all shapes have the correct number of
@@ -260,28 +406,56 @@ class ActiveShapeModel:
       s = s + shape
     return s / len(shapes)
 
-  def __produce_model(self, shapes):
-    """ Actually produces the shape model
+  def __construct_model(self, shapes):
+    """ Constructs the shape model
     """
     shape_vectors = np.array([s.get_vector() for s in self.shapes])
     mean = np.mean(shape_vectors, axis=0)
+
+    # Move mean to the origin
+    # FIXME Clean this up...
+    mean = np.reshape(mean, (-1,2))
+    min_x = min(mean[:,0])
+    min_y = min(mean[:,1])
+
+    #mean = np.array([pt - min(mean[:,i]) for i in [0,1] for pt in mean[:,i]])
+    #mean = np.array([pt - min(mean[:,i]) for pt in mean for i in [0,1]])
+    mean[:,0] = [x - min_x for x in mean[:,0]]
+    mean[:,1] = [y - min_y for y in mean[:,1]]
+    #max_x = max(mean[:,0])
+    #max_y = max(mean[:,1])
+    #mean[:,0] = [x/(2) for x in mean[:,0]]
+    #mean[:,1] = [y/(3) for y in mean[:,1]]
+    mean = mean.flatten()
+    #print mean
+
     # Produce covariance matrix
     cov = np.cov(shape_vectors, rowvar=0)
     # Find eigenvalues/vectors of the covariance matrix
     evals, evecs = np.linalg.eig(cov)
 
-    print evals
-    print evecs[0]
+    # Find number of modes required to describe the shape accurately
+    t = 0
+    for i in range(len(evals)):
+      if sum(evals[:i]) / sum(evals) < 0.99:
+        t = t + 1
+      else: break
+    print "Constructed model with %d modes of variation" % t
+    return (evals[:t], evecs[:,:t], mean, t)
 
-    for m in range(-1000,1000):
-      test = mean + m*evecs[:,0]
-      s = Shape([])
-      # Make a shape
-      for i,j in np.reshape(test, (-1,2)):
-        s.add_point(Point(i, j))
-      # Show the shape
-      ShapeViewer.show_shapes([s])
+  def generate_example(self, b):
+    """ b is a vector of floats to apply to each mode of variation
+    """
+    # Need to make an array same length as mean to apply to eigen
+    # vectors
+    full_b = np.zeros(len(self.mean))
+    for i in range(self.modes): full_b[i] = b[i]
 
+    p = self.mean
+    for i in range(self.modes): p = p + full_b[i]*self.evecs[:,i]
+
+    # Construct a shape object
+    return Shape.from_vector(p)
 
   def __procrustes(self, shapes):
     """ This function aligns all shapes passed as a parameter by using
@@ -296,6 +470,7 @@ class ActiveShapeModel:
     a = shapes[0]
     trans = np.zeros((4, len(shapes)))
     converged = False
+    current_accuracy = sys.maxint
     while not converged:
       # Now get mean shape
       mean = self.__get_mean_shape(shapes)
@@ -310,8 +485,11 @@ class ActiveShapeModel:
 
       # Test if the average transformation required is very close to the
       # identity transformation and stop iteration if it is
-      if np.mean(np.array([1, 0, 0, 0]) - np.mean(trans, axis=1))**2 < 1e-25:
-        converged = True
+      accuracy = np.mean(np.array([1, 0, 0, 0]) - np.mean(trans, axis=1))**2
+      # If the accuracy starts to decrease then we have reached limit of precision
+      # possible
+      if accuracy > current_accuracy: converged = True
+      else: current_accuracy = accuracy
     return shapes
 
   def __create_weight_matrix(self, shapes):
@@ -345,17 +523,3 @@ class ActiveShapeModel:
         w[k] += np.var(distances[:, k, l])
     # Invert weights
     return 1/w
-
-def main():
-  shapes = PointsReader.read_directory(sys.argv[1])
-  a = ActiveShapeModel(shapes)
-  #new = shapes[0].align_to_shape(shapes[1], a.w)
-  #ShapeViewer.show_shapes([new, shapes[0]])
-  #ShapeViewer.show_shapes([new, shapes[1]])
-  #ShapeViewer.show_shapes([new, shapes[0], shapes[1]])
-  #ShapeViewer.show_shapes(shapes)
-  #ShapeViewer.show_shapes(s)
-  print "Finished"
-
-if __name__ == "__main__":
-  main()
