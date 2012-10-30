@@ -201,19 +201,19 @@ class ShapeViewer ( object ):
     min_y = int(min([pt.y for shape in shapes for pt in shape.pts]))
 
     i = cv.CreateImage((max_x-min_x+20, max_y-min_y+20), cv.IPL_DEPTH_8U, 3)
-    cv.Set(i, (255,255,255))
+    cv.Set(i, (0, 0, 0))
     for shape in shapes:
-      #r = randint(0, 255)
-      #g = randint(0, 255)
-      #b = randint(0, 255)
-      r = 0
-      g = 0
-      b = 0
+      r = randint(0, 255)
+      g = randint(0, 255)
+      b = randint(0, 255)
+      #r = 0
+      #g = 0
+      #b = 0
       for pt_num, pt in enumerate(shape.pts):
         # Draw normals
-        norm = shape.get_normal_to_point(pt_num)
-        cv.Line(i,(pt.x-min_x,pt.y-min_y), \
-            (norm[0]*10 + pt.x-min_x, norm[1]*10 + pt.y-min_y), (r, g, b))
+        #norm = shape.get_normal_to_point(pt_num)
+        #cv.Line(i,(pt.x-min_x,pt.y-min_y), \
+        #    (norm[0]*10 + pt.x-min_x, norm[1]*10 + pt.y-min_y), (r, g, b))
         cv.Circle(i, (int(pt.x-min_x), int(pt.y-min_y)), 2, (r, g, b), -1)
     cv.ShowImage("Shape Model",i)
 
@@ -241,7 +241,8 @@ class ShapeViewer ( object ):
   def draw_model_fitter(f):
     cv.NamedWindow("Model Fitter", cv.CV_WINDOW_AUTOSIZE)
     # Copy image
-    i = f.image
+    i = cv.CreateImage(cv.GetSize(f.image), f.image.depth, 3)
+    cv.Copy(f.image, i)
     for pt_num, pt in enumerate(f.shape.pts):
       # Draw normals
       cv.Circle(i, (int(pt.x), int(pt.y)), 2, (0,0,0), -1)
@@ -295,7 +296,9 @@ class ModelFitter:
   """
   def __init__(self, asm, image, t=Point(0.0,0.0)):
     self.image = image
-    self.g_image = self.__produce_gradient_image(image)
+    self.g_image = []
+    for i in range(0,4):
+      self.g_image.append(self.__produce_gradient_image(image, 2**i))
     self.asm = asm
     # Copy mean shape as starting shape and transform it to origin
     self.shape = Shape.from_vector(asm.mean).transform(t)
@@ -327,51 +330,128 @@ class ModelFitter:
                           pt.y*ratio_y if ratio_y < 1 else pt.y))
     return new
 
-  def __produce_gradient_image(self, i):
-    grey_image = cv.CreateImage(cv.GetSize(i), 8, 1)
+  def __produce_gradient_image(self, i, scale):
+    size = cv.GetSize(i)
+    grey_image = cv.CreateImage(size, 8, 1)
+
+    size = [s/scale for s in size]
+    grey_image_small = cv.CreateImage(size, 8, 1)
+
     cv.CvtColor(i, grey_image, cv.CV_RGB2GRAY)
+
     df_dx = cv.CreateImage(cv.GetSize(i), cv.IPL_DEPTH_16S, 1)
     cv.Sobel( grey_image, df_dx, 1, 1)
     cv.Convert(df_dx, grey_image)
+    cv.Resize(grey_image, grey_image_small)#, interpolation=cv.CV_INTER_NN)
+    cv.Resize(grey_image_small, grey_image)#, interpolation=cv.CV_INTER_NN)
     return grey_image
 
-  def do_iteration(self):
+  def do_iteration(self, scale):
     """ Does a single iteration of the shape fitting algorithm.
     This is useful when we want to show the algorithm converging on
     an image
 
     :return shape: The shape in its current orientation
     """
-    for i, pt in enumerate(self.shape.pts):
-      self.__get_max_along_normal(i)
 
-  def __get_max_along_normal(self, p_num):
+    # Build new shape from max points along normal to current
+    # shape
+    s = Shape([])
+    for i, pt in enumerate(self.shape.pts):
+      s.add_point(self.__get_max_along_normal(i, scale))
+
+    new_s = s.align_to_shape(Shape.from_vector(self.asm.mean), self.asm.w)
+
+    var = new_s.get_vector() - self.asm.mean
+    new = self.asm.mean
+    for i in range(len(self.asm.evecs.T)):
+      b = np.dot(self.asm.evecs[:,i],var)
+      max_b = 2*math.sqrt(self.asm.evals[i])
+      b = max(min(b, max_b), -max_b)
+      new = new + self.asm.evecs[:,i]*b
+
+    self.shape = Shape.from_vector(new).align_to_shape(s, self.asm.w)
+
+  def __get_max_along_normal(self, p_num, scale):
     """ Gets the max edge response along the normal to a point
 
     :param p_num: Is the number of the point in the shape
     """
+
     norm = self.shape.get_normal_to_point(p_num)
     p = self.shape.pts[p_num]
 
     # Find extremes of normal within the image
     # Test x first
     min_t = -p.x / norm[0]
-    if p.y + min_t*norm[1] < 0 or p.y + min_t*norm[1] > self.image.height:
+    if p.y + min_t*norm[1] < 0:
       min_t = -p.y / norm[1]
+    elif p.y + min_t*norm[1] > self.image.height:
+      min_t = (self.image.height - p.y) / norm[1]
+
+    # X first again
     max_t = (self.image.width - p.x) / norm[0]
-    if p.y + max_t*norm[1] < 0 or p.y + max_t*norm[1] > self.image.height:
-      max_t = (self.image.width - p.y) / norm[1]
+    if p.y + max_t*norm[1] < 0:
+      max_t = -p.y / norm[1]
+    elif p.y + max_t*norm[1] > self.image.height:
+      max_t = (self.image.height - p.y) / norm[1]
+
+    # Swap round if max is actually larger...
+    tmp = max_t
+    max_t = max(min_t, max_t)
+    min_t = min(min_t, tmp)
 
     # Get length of the normal within the image
-    l = math.sqrt(max(norm[0]*min_t + p.x, norm[0]*max_t + p.x)
+    x1 = min(p.x+max_t*norm[0], p.x+min_t*norm[0])
+    x2 = max(p.x+max_t*norm[0], p.x+min_t*norm[0])
+    y1 = min(p.y+max_t*norm[1], p.y+min_t*norm[1])
+    y2 = max(p.y+max_t*norm[1], p.y+min_t*norm[1])
+    l = math.sqrt((x2-x1)**2 + (y2-y1)**2)
 
-#    cv.Line(self.image, (int(norm[0]*min_t + p.x), int(norm[1]*min_t + p.y)), \
-#            (int(norm[0]*max_t + p.x), int(norm[1]*max_t + p.y)), (0, 0, 0))
+    img = cv.CreateImage(cv.GetSize(self.image), self.g_image[scale].depth, 1)
+    cv.Copy(self.g_image[scale], img)
+    #cv.Circle(img, \
+    #    (int(norm[0]*min_t + p.x), int(norm[1]*min_t + p.y)), \
+    #    5, (0, 0, 0))
+    #cv.Circle(img, \
+    #    (int(norm[0]*max_t + p.x), int(norm[1]*max_t + p.y)), \
+    #    5, (0, 0, 0))
 
+    # Scan over the whole line
+    max_pt = p
+    max_edge = 0
 
-#    cv.NamedWindow("Shape Model", cv.CV_WINDOW_AUTOSIZE)
-#    cv.ShowImage("Shape Model",self.image)
+    # Now check over the vector
+    #v = min(max_t, -min_t)
+    #for t in drange(min_t, max_t, (max_t-min_t)/l):
+    search = 20+scale*10
+    # Look 6 pixels to each side too
+    for side in range(-6, 6):
+      # Normal to normal...
+      new_p = Point(p.x + side*-norm[1], p.y + side*norm[0])
+      for t in drange(-search if -search > min_t else min_t, \
+                       search if search < max_t else max_t , 1):
+
+        x = int(norm[0]*t + new_p.x)
+        y = int(norm[1]*t + new_p.y)
+        if x < 0 or x > self.image.width or y < 0 or y > self.image.height:
+          continue
+#        cv.Circle(img, (x, y), 3, (100,100,100))
+        #print x, y, self.g_image.width, self.g_image.height
+        if self.g_image[scale][y-1, x-1] > max_edge:
+          max_edge = self.g_image[scale][y-1, x-1]
+          max_pt = Point(new_p.x + t*norm[0], new_p.y + t*norm[1])
+
+#    for point in self.shape.pts:
+#      cv.Circle(img, (int(point.x), int(point.y)), 3, (255,255,255))
+##
+#    cv.Circle(img, (int(max_pt.x), int(max_pt.y)), 3, (255,255,255))
+##
+#    cv.NamedWindow("Scale", cv.CV_WINDOW_AUTOSIZE)
+#    cv.ShowImage("Scale",img)
 #    cv.WaitKey()
+#
+    return max_pt
 
 class ActiveShapeModel:
   """
